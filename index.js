@@ -40,11 +40,25 @@ io.on("connection", (socket) => {
   // 1. Get video formats
   socket.on("get-formats", (url) => {
     const result = spawnSync("yt-dlp", ["-J", url], { encoding: "utf-8" });
+
+    if (result.error) {
+      console.error("❌ yt-dlp spawn error:", result.error.message);
+      socket.emit("status", "❌ Failed to fetch formats.");
+      socket.emit("formats", []);
+      return;
+    }
+
+    if (result.stderr) {
+      console.warn("⚠️ yt-dlp stderr:", result.stderr.trim());
+    }
+
     try {
       const info = JSON.parse(result.stdout);
-      socket.emit("formats", info.formats || []);
+      if (!info || !info.formats) throw new Error("Invalid or missing formats");
+      socket.emit("formats", info.formats);
     } catch (e) {
       console.error("❌ Error parsing formats:", e.message);
+      socket.emit("status", "❌ Could not parse formats. Invalid URL or unavailable video.");
       socket.emit("formats", []);
     }
   });
@@ -109,13 +123,17 @@ io.on("connection", (socket) => {
     });
 
     ytdlp.stderr.on("data", (data) => {
-      socket.emit("status", data.toString());
+      const errorMsg = data.toString().trim();
+      if (errorMsg) {
+        console.warn("⚠️ yt-dlp stderr:", errorMsg);
+        socket.emit("status", errorMsg);
+      }
     });
 
     ytdlp.on("close", () => {
       let finalFile = fullPath;
 
-      // Fallback: dynamically find last modified file in downloads dir
+      // Fallback: find last modified file if expected file not found
       if (!fs.existsSync(finalFile)) {
         const files = fs.readdirSync(DOWNLOAD_DIR)
           .map((name) => {
@@ -128,6 +146,7 @@ io.on("connection", (socket) => {
           })
           .filter((f) => f.name.endsWith(type === "audio" ? ".mp3" : ".mp4"))
           .sort((a, b) => b.time - a.time);
+
         if (files.length) {
           finalFile = files[0].path;
         }
@@ -137,9 +156,10 @@ io.on("connection", (socket) => {
         const filename = path.basename(finalFile);
         console.log("✅ File downloaded:", filename);
         socket.emit("complete", { filename });
-        scheduleFileDeletion(finalFile); // 🧹 Schedule deletion in 2 hours
+        scheduleFileDeletion(finalFile);
       } else {
-        socket.emit("status", "❌ Download failed.");
+        console.error("❌ Download completed but file not found.");
+        socket.emit("status", "❌ Download failed. File not found.");
       }
     });
   });
@@ -155,7 +175,7 @@ app.get("/download/:filename", (req, res) => {
   }
 });
 
-// Start server
+// 🚀 Start server
 const PORT = process.env.PORT || 7350;
 server.listen(PORT, () => {
   console.log(`🚀 Backend running on http://localhost:${PORT}`);
