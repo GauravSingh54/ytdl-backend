@@ -30,7 +30,7 @@ const scheduleFileDeletion = (filepath) => {
         console.error("❌ Failed to delete file:", err.message);
       }
     }
-  }, 30 * 1000); // 2 hours
+  }, 2 * 60 * 60 * 1000); // 2 hours
 };
 
 // 🔌 WebSocket Communication
