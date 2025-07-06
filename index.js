@@ -156,7 +156,7 @@ app.get("/download/:filename", (req, res) => {
 });
 
 // Start server
-const PORT = 7350;
+const PORT = process.env.PORT || 7350;
 server.listen(PORT, () => {
   console.log(`🚀 Backend running on http://localhost:${PORT}`);
 });
