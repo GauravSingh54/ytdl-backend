@@ -5,6 +5,8 @@ const { Server } = require("socket.io");
 const { spawn, spawnSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
+const YTDLP_PATH = path.join(__dirname, "bin", "yt-dlp");
+
 
 const app = express();
 const server = http.createServer(app);
@@ -39,7 +41,7 @@ io.on("connection", (socket) => {
 
   // 1. Get video formats
   socket.on("get-formats", (url) => {
-    const result = spawnSync("yt-dlp", ["-J", url], { encoding: "utf-8" });
+    const result = spawnSync("YTDLP_PATH", ["-J", url], { encoding: "utf-8" });
 
     if (result.error) {
       console.error("❌ yt-dlp spawn error:", result.error.message);
@@ -68,7 +70,7 @@ io.on("connection", (socket) => {
     const outputTemplate = path.join(DOWNLOAD_DIR, "%(title)s.%(ext)s");
 
     const filenameResult = spawnSync(
-      "yt-dlp",
+      "YTDLP_PATH",
       ["-f", format_id, "--get-filename", "-o", "%(title)s.%(ext)s", url],
       { encoding: "utf-8" }
     );
@@ -92,7 +94,7 @@ io.on("connection", (socket) => {
         : []),
     ];
 
-    const ytdlp = spawn("yt-dlp", args);
+    const ytdlp = spawn("YTDLP_PATH", args);
 
     ytdlp.stdout.on("data", (data) => {
       const output = data.toString();
