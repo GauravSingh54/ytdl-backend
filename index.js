@@ -65,28 +65,49 @@ io.on("connection", (socket) => {
   console.log("✅ Client connected");
 
   socket.on("get-formats", (url) => {
-    const result = spawnSync(YTDLP_PATH, buildYtDlpArgs(url, ["-J"]), { encoding: "utf-8" });
+  socket.emit("status", "🔍 Fetching formats...");
 
-    if (result.error) {
-      console.error("❌ yt-dlp spawn error:", result.error.message);
-      socket.emit("status", "❌ Failed to fetch formats.");
-      socket.emit("formats", []);
-      return;
+  const ytdlp = spawn(YTDLP_PATH, buildYtDlpArgs(url, ["-J"]));
+
+  let stdout = "";
+  let stderr = "";
+
+  const timeout = setTimeout(() => {
+    ytdlp.kill("SIGKILL");
+    socket.emit("status", "❌ Timeout fetching formats.");
+    socket.emit("formats", []);
+  }, 20000); // 20 seconds timeout
+
+  ytdlp.stdout.on("data", (data) => {
+    stdout += data.toString();
+  });
+
+  ytdlp.stderr.on("data", (data) => {
+    stderr += data.toString();
+  });
+
+  ytdlp.on("close", () => {
+    clearTimeout(timeout);
+
+    if (stderr) {
+      console.warn("⚠️ yt-dlp stderr:", stderr.trim());
     }
 
     try {
-      const info = JSON.parse(result.stdout);
+      const info = JSON.parse(stdout);
       const formats = info.formats || [];
 
       const audioOnly = formats.filter(f => f.vcodec === "none" && f.acodec !== "none");
 
       socket.emit("formats", { audioOnly });
     } catch (e) {
-      console.error("❌ Parsing error:", e.message);
+      console.error("❌ JSON parsing error:", e.message);
       socket.emit("status", "❌ Could not parse formats.");
       socket.emit("formats", []);
     }
   });
+});
+
 
   socket.on("start-download", ({ url, format_id, type }) => {
     const outputTemplate = path.join(DOWNLOAD_DIR, "%(title)s.%(ext)s");
