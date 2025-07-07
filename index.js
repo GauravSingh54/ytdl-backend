@@ -7,10 +7,12 @@ const path = require("path");
 const fs = require("fs");
 
 const YTDLP_PATH = path.join(__dirname, "bin", "yt-dlp");
+const FFMPEG_LOCATION = process.env.FFMPEG_LOCATION;
 const COOKIE_B64 = process.env.COOKIE_B64 || "";
 const COOKIE_DIR = path.join(__dirname, "secrets");
 const COOKIE_FILE = path.join(COOKIE_DIR, "youtube-cookies.txt");
 
+// Write base64 cookie file if available
 if (COOKIE_B64) {
   fs.mkdirSync(COOKIE_DIR, { recursive: true });
   fs.writeFileSync(COOKIE_FILE, Buffer.from(COOKIE_B64, "base64").toString("utf-8"));
@@ -19,11 +21,15 @@ if (COOKIE_B64) {
   console.warn("⚠️ COOKIE_B64 not found. Some YouTube videos may require it.");
 }
 
+if (!FFMPEG_LOCATION) {
+  console.warn("⚠️ FFMPEG_LOCATION env not found. yt-dlp may warn or fail for audio extraction.");
+} else {
+  console.log("✅ ffmpeg location set:", FFMPEG_LOCATION);
+}
+
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: "*" },
-});
+const io = new Server(server, { cors: { origin: "*" } });
 
 const DOWNLOAD_DIR = path.join(__dirname, "downloads");
 if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR);
@@ -32,6 +38,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(DOWNLOAD_DIR));
 
+// Auto-delete file after 2 hours
 const scheduleFileDeletion = (filepath) => {
   setTimeout(() => {
     if (fs.existsSync(filepath)) {
@@ -42,18 +49,27 @@ const scheduleFileDeletion = (filepath) => {
         console.error("❌ Failed to delete file:", err.message);
       }
     }
-  }, 2 * 60 * 60 * 1000);
+  }, 2 * 60 * 60 * 1000); // 2 hours
 };
 
+// 🧠 Build yt-dlp args with common flags
+const buildYtDlpArgs = (url, extraArgs = []) => {
+  const args = [
+    "--cookies", COOKIE_FILE,
+    ...(FFMPEG_LOCATION ? ["--ffmpeg-location", FFMPEG_LOCATION] : []),
+    ...extraArgs,
+    url
+  ];
+  return args;
+};
+
+// 🔌 WebSocket logic
 io.on("connection", (socket) => {
   console.log("✅ Client connected");
 
+  // Get formats
   socket.on("get-formats", (url) => {
-    const result = spawnSync(
-      YTDLP_PATH,
-      ["--cookies", COOKIE_FILE, "-J", url],
-      { encoding: "utf-8" }
-    );
+    const result = spawnSync(YTDLP_PATH, buildYtDlpArgs(url, ["-J"]), { encoding: "utf-8" });
 
     if (result.error) {
       console.error("❌ yt-dlp spawn error:", result.error.message);
@@ -77,12 +93,13 @@ io.on("connection", (socket) => {
     }
   });
 
+  // Start download
   socket.on("start-download", ({ url, format_id, type }) => {
     const outputTemplate = path.join(DOWNLOAD_DIR, "%(title)s.%(ext)s");
 
     const filenameResult = spawnSync(
       YTDLP_PATH,
-      ["--cookies", COOKIE_FILE, "-f", format_id, "--get-filename", "-o", "%(title)s.%(ext)s", url],
+      buildYtDlpArgs(url, ["-f", format_id, "--get-filename", "-o", "%(title)s.%(ext)s"]),
       { encoding: "utf-8" }
     );
 
@@ -94,17 +111,11 @@ io.on("connection", (socket) => {
       return;
     }
 
-    const args = [
-      "--cookies", COOKIE_FILE,
-      url,
-      "-f",
-      format_id,
-      "-o",
-      outputTemplate,
-      ...(type === "audio"
-        ? ["--extract-audio", "--audio-format", "mp3", "--audio-quality", "192"]
-        : []),
-    ];
+    const args = buildYtDlpArgs(url, [
+      "-f", format_id,
+      "-o", outputTemplate,
+      ...(type === "audio" ? ["--extract-audio", "--audio-format", "mp3", "--audio-quality", "192"] : [])
+    ]);
 
     const ytdlp = spawn(YTDLP_PATH, args);
 
@@ -176,6 +187,7 @@ io.on("connection", (socket) => {
   });
 });
 
+// Serve download route
 app.get("/download/:filename", (req, res) => {
   const file = path.join(DOWNLOAD_DIR, req.params.filename);
   if (fs.existsSync(file)) {
@@ -185,6 +197,7 @@ app.get("/download/:filename", (req, res) => {
   }
 });
 
+// Start server
 const PORT = process.env.PORT || 7350;
 server.listen(PORT, () => {
   console.log(`🚀 Backend running on http://localhost:${PORT}`);
