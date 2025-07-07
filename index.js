@@ -5,8 +5,20 @@ const { Server } = require("socket.io");
 const { spawn, spawnSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
+require("dotenv").config();
 
 const YTDLP_PATH = path.join(__dirname, "bin", "yt-dlp");
+const COOKIE_B64 = process.env.COOKIE_B64 || "";
+const COOKIE_DIR = path.join(__dirname, "secrets");
+const COOKIE_FILE = path.join(COOKIE_DIR, "youtube-cookies.txt");
+
+if (COOKIE_B64) {
+  fs.mkdirSync(COOKIE_DIR, { recursive: true });
+  fs.writeFileSync(COOKIE_FILE, Buffer.from(COOKIE_B64, "base64").toString("utf-8"));
+  console.log("✅ Cookie file created from base64.");
+} else {
+  console.warn("⚠️ COOKIE_B64 not found. Some YouTube videos may require it.");
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -21,7 +33,6 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(DOWNLOAD_DIR));
 
-// 🧹 Schedule file deletion after 2 hours
 const scheduleFileDeletion = (filepath) => {
   setTimeout(() => {
     if (fs.existsSync(filepath)) {
@@ -32,16 +43,18 @@ const scheduleFileDeletion = (filepath) => {
         console.error("❌ Failed to delete file:", err.message);
       }
     }
-  }, 2 * 60 * 60 * 1000); // 2 hours
+  }, 2 * 60 * 60 * 1000);
 };
 
-// 🔌 WebSocket Communication
 io.on("connection", (socket) => {
   console.log("✅ Client connected");
 
-  // 1. Get video formats
   socket.on("get-formats", (url) => {
-    const result = spawnSync(YTDLP_PATH, ["-J", url], { encoding: "utf-8" });
+    const result = spawnSync(
+      YTDLP_PATH,
+      ["--cookies", COOKIE_FILE, "-J", url],
+      { encoding: "utf-8" }
+    );
 
     if (result.error) {
       console.error("❌ yt-dlp spawn error:", result.error.message);
@@ -65,13 +78,12 @@ io.on("connection", (socket) => {
     }
   });
 
-  // 2. Start download
   socket.on("start-download", ({ url, format_id, type }) => {
     const outputTemplate = path.join(DOWNLOAD_DIR, "%(title)s.%(ext)s");
 
     const filenameResult = spawnSync(
       YTDLP_PATH,
-      ["-f", format_id, "--get-filename", "-o", "%(title)s.%(ext)s", url],
+      ["--cookies", COOKIE_FILE, "-f", format_id, "--get-filename", "-o", "%(title)s.%(ext)s", url],
       { encoding: "utf-8" }
     );
 
@@ -84,6 +96,7 @@ io.on("connection", (socket) => {
     }
 
     const args = [
+      "--cookies", COOKIE_FILE,
       url,
       "-f",
       format_id,
@@ -164,7 +177,6 @@ io.on("connection", (socket) => {
   });
 });
 
-// 3. Serve file for download
 app.get("/download/:filename", (req, res) => {
   const file = path.join(DOWNLOAD_DIR, req.params.filename);
   if (fs.existsSync(file)) {
@@ -174,7 +186,6 @@ app.get("/download/:filename", (req, res) => {
   }
 });
 
-// 🚀 Start server
 const PORT = process.env.PORT || 7350;
 server.listen(PORT, () => {
   console.log(`🚀 Backend running on http://localhost:${PORT}`);
