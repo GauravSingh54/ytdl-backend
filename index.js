@@ -5,7 +5,6 @@ const { Server } = require("socket.io");
 const { spawn, spawnSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
-require("dotenv").config();
 
 const YTDLP_PATH = path.join(__dirname, "bin", "yt-dlp");
 const COOKIE_B64 = process.env.COOKIE_B64 || "";
