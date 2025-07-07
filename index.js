@@ -5,8 +5,8 @@ const { Server } = require("socket.io");
 const { spawn, spawnSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
-const YTDLP_PATH = path.join(__dirname, "bin", "yt-dlp");
 
+const YTDLP_PATH = path.join(__dirname, "bin", "yt-dlp");
 
 const app = express();
 const server = http.createServer(app);
@@ -41,7 +41,7 @@ io.on("connection", (socket) => {
 
   // 1. Get video formats
   socket.on("get-formats", (url) => {
-    const result = spawnSync("YTDLP_PATH", ["-J", url], { encoding: "utf-8" });
+    const result = spawnSync(YTDLP_PATH, ["-J", url], { encoding: "utf-8" });
 
     if (result.error) {
       console.error("❌ yt-dlp spawn error:", result.error.message);
@@ -70,7 +70,7 @@ io.on("connection", (socket) => {
     const outputTemplate = path.join(DOWNLOAD_DIR, "%(title)s.%(ext)s");
 
     const filenameResult = spawnSync(
-      "YTDLP_PATH",
+      YTDLP_PATH,
       ["-f", format_id, "--get-filename", "-o", "%(title)s.%(ext)s", url],
       { encoding: "utf-8" }
     );
@@ -94,19 +94,17 @@ io.on("connection", (socket) => {
         : []),
     ];
 
-    const ytdlp = spawn("YTDLP_PATH", args);
+    const ytdlp = spawn(YTDLP_PATH, args);
 
     ytdlp.stdout.on("data", (data) => {
       const output = data.toString();
 
-      // Live Status Messages
       if (output.includes("Downloading webpage")) socket.emit("status", "📄 Downloading video page...");
       else if (output.includes("Extracting URL")) socket.emit("status", "🔗 Extracting video URL...");
       else if (output.includes("Downloading m3u8 information")) socket.emit("status", "🔄 Fetching stream information...");
       else if (output.includes("Downloading 1 format")) socket.emit("status", "⚙️ Preparing formats...");
       else if (output.includes("Destination:")) socket.emit("status", "⬇️ Starting download...");
 
-      // Live Progress Parsing
       const match = output.match(
         /\[download\]\s+(\d{1,3}\.\d+)% of\s+([\d.]+\w+) at\s+([\d.]+\w+\/s) ETA\s+(\d{2}:\d{2})/
       );
@@ -135,7 +133,6 @@ io.on("connection", (socket) => {
     ytdlp.on("close", () => {
       let finalFile = fullPath;
 
-      // Fallback: find last modified file if expected file not found
       if (!fs.existsSync(finalFile)) {
         const files = fs.readdirSync(DOWNLOAD_DIR)
           .map((name) => {
