@@ -2,7 +2,7 @@ const express = require("express");
 const http = require("http");
 const cors = require("cors");
 const { Server } = require("socket.io");
-const { spawn, spawnSync } = require("child_process");
+const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 
@@ -12,7 +12,6 @@ const COOKIE_B64 = process.env.COOKIE_B64 || "";
 const COOKIE_DIR = path.join(__dirname, "secrets");
 const COOKIE_FILE = path.join(COOKIE_DIR, "youtube-cookies.txt");
 
-// Decode and write cookie file
 if (COOKIE_B64) {
   fs.mkdirSync(COOKIE_DIR, { recursive: true });
   fs.writeFileSync(COOKIE_FILE, Buffer.from(COOKIE_B64, "base64").toString("utf-8"));
@@ -38,7 +37,6 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(DOWNLOAD_DIR));
 
-// Auto-delete after 2 hours
 const scheduleFileDeletion = (filepath) => {
   setTimeout(() => {
     if (fs.existsSync(filepath)) {
@@ -49,10 +47,9 @@ const scheduleFileDeletion = (filepath) => {
         console.error("❌ Failed to delete:", err.message);
       }
     }
-  }, 2 * 60 * 60 * 1000);
+  }, 2 * 60 * 60 * 1000); // 2 hours
 };
 
-// yt-dlp base args
 const buildYtDlpArgs = (url, extraArgs = []) => [
   "--cookies", COOKIE_FILE,
   ...(FFMPEG_LOCATION ? ["--ffmpeg-location", FFMPEG_LOCATION] : []),
@@ -60,56 +57,55 @@ const buildYtDlpArgs = (url, extraArgs = []) => [
   url,
 ];
 
-// Socket.io handlers
 io.on("connection", (socket) => {
-  console.log("✅ Client connected");
+  console.log("🔌 Client connected");
 
+  // 🔍 Fetch formats
   socket.on("get-formats", (url) => {
-  socket.emit("status", "🔍 Fetching formats...");
+    console.log(`🟡 Fetching formats for: ${url}`);
+    socket.emit("status", "🔍 Fetching formats...");
 
-  const ytdlp = spawn(YTDLP_PATH, buildYtDlpArgs(url, ["-J"]));
+    const ytdlp = spawn(YTDLP_PATH, buildYtDlpArgs(url, ["-J"]));
+    let stdout = "";
+    let stderr = "";
 
-  let stdout = "";
-  let stderr = "";
-
-  const timeout = setTimeout(() => {
-    ytdlp.kill("SIGKILL");
-    socket.emit("status", "❌ Timeout fetching formats.");
-    socket.emit("formats", []);
-  }, 20000); // 20 seconds timeout
-
-  ytdlp.stdout.on("data", (data) => {
-    stdout += data.toString();
-  });
-
-  ytdlp.stderr.on("data", (data) => {
-    stderr += data.toString();
-  });
-
-  ytdlp.on("close", () => {
-    clearTimeout(timeout);
-
-    if (stderr) {
-      console.warn("⚠️ yt-dlp stderr:", stderr.trim());
-    }
-
-    try {
-      const info = JSON.parse(stdout);
-      const formats = info.formats || [];
-
-      const audioOnly = formats.filter(f => f.vcodec === "none" && f.acodec !== "none");
-
-      socket.emit("formats", { audioOnly });
-    } catch (e) {
-      console.error("❌ JSON parsing error:", e.message);
-      socket.emit("status", "❌ Could not parse formats.");
+    const timeout = setTimeout(() => {
+      ytdlp.kill("SIGKILL");
+      console.error("⏱️ Format fetch timeout");
+      socket.emit("status", "❌ Timeout fetching formats.");
       socket.emit("formats", []);
-    }
+    }, 20000);
+
+    ytdlp.stdout.on("data", (data) => {
+      stdout += data.toString();
+    });
+
+    ytdlp.stderr.on("data", (data) => {
+      stderr += data.toString();
+    });
+
+    ytdlp.on("close", () => {
+      clearTimeout(timeout);
+      if (stderr) console.warn("⚠️ yt-dlp stderr:\n", stderr.trim());
+
+      try {
+        const info = JSON.parse(stdout);
+        const formats = info.formats || [];
+        const audioOnly = formats.filter(f => f.vcodec === "none" && f.acodec !== "none");
+
+        console.log(`✅ Formats fetched (${audioOnly.length} audio options)`);
+        socket.emit("formats", { audioOnly });
+      } catch (e) {
+        console.error("❌ Failed to parse formats:", e.message);
+        socket.emit("status", "❌ Could not parse formats.");
+        socket.emit("formats", []);
+      }
+    });
   });
-});
 
-
+  // ⬇️ Start download
   socket.on("start-download", ({ url, format_id, type }) => {
+    console.log(`⬇️ Starting ${type} download for: ${url}`);
     const outputTemplate = path.join(DOWNLOAD_DIR, "%(title)s.%(ext)s");
 
     let args = [];
@@ -135,6 +131,7 @@ io.on("connection", (socket) => {
 
     ytdlp.stdout.on("data", (data) => {
       const output = data.toString();
+      process.stdout.write(output); // Log everything to terminal
       if (output.includes("Downloading webpage")) socket.emit("status", "📄 Downloading webpage...");
       if (output.includes("Destination:")) socket.emit("status", "⬇️ Starting download...");
 
@@ -175,17 +172,23 @@ io.on("connection", (socket) => {
         socket.emit("complete", { filename });
         scheduleFileDeletion(finalFile);
       } else {
+        console.error("❌ Download completed but file not found.");
         socket.emit("status", "❌ Download failed. File not found.");
       }
     });
   });
 });
 
-// Serve file
+// 🔗 File serving endpoint
 app.get("/download/:filename", (req, res) => {
   const file = path.join(DOWNLOAD_DIR, req.params.filename);
-  if (fs.existsSync(file)) res.download(file);
-  else res.status(404).send("❌ File not found.");
+  if (fs.existsSync(file)) {
+    console.log(`📤 Downloading file: ${req.params.filename}`);
+    res.download(file);
+  } else {
+    console.error("❌ File not found:", file);
+    res.status(404).send("❌ File not found.");
+  }
 });
 
 const PORT = process.env.PORT || 7350;
